@@ -33,27 +33,30 @@ flowchart TB
     subgraph collect["scripts/collect_changes.py（只读）"]
         B["git rev-parse"] --> C{"是 git 仓库?"}
         C -- 否 --> STOP["提示：非仓库"]
-        C -- 是 --> D["git diff HEAD --name-status -z"]
-        D --> E["git ls-files --others -z"]
-        E --> F["逐文件：diff 或读新文件内容"]
-        F --> G["截断大 diff · 跳过二进制"]
+        C -- 是 --> D{"有 HEAD?"}
+        D -- 是 --> E["git diff HEAD --name-status -z"]
+        D -- 否 --> E2["git diff --cached --name-status -z"]
+        E --> F["git ls-files --others -z"]
+        E2 --> F
+        F --> G["逐文件：diff 或读新文件内容"]
+        G --> H["截断大 diff · 跳过二进制 · 检测合并冲突"]
     end
 
     subgraph generate["Agent 读规范 + 写 message"]
-        H["读 commit-conventions.md<br/>type / scope 规则"]
-        I["读 message-style-guide.md<br/>措辞 / 理由写法"]
-        H & I --> J["逐文件生成<br/>单行 message + 功能级理由"]
+        I["读 commit-conventions.md<br/>type / scope 规则"]
+        J["读 message-style-guide.md<br/>措辞 / 理由写法"]
+        I & J --> K["逐文件生成<br/>单行 message + 功能级理由"]
     end
 
     subgraph output["输出"]
-        K["📋 清单供复制粘贴"]
-        L["❌ git add/commit/push 禁止"]
+        L["📋 清单供复制粘贴"]
+        M["❌ git add/commit/push 禁止"]
     end
 
     A --> B
-    G --> H
-    J --> K
-    K -.-x L
+    H --> I
+    K --> L
+    L -.-x M
 ```
 
 ## ✨ 核心亮点
@@ -63,8 +66,11 @@ flowchart TB
 | **只读安全** | 全程仅调 `rev-parse` / `diff` / `ls-files`，严禁任何写操作 | `collect_changes.py` 全部 git 调用 |
 | **逐文件输出** | 每个改动文件一条单行 message + 一行功能级理由，直接复制粘贴 | SKILL.md Workflow §5 |
 | **Conventional Commits** | type 英文前缀 + 中文正文，scope 按目录自动推断、拿不准就省略 | `references/commit-conventions.md` |
-| **全类型覆盖** | 新增 / 修改 / 删除 / 改名，按类型分组、组内字母序 | `collect_changes.py` parse_name_status |
-| **大文件 & 二进制** | diff > 200 行截断前 80 行；新文件 > 300 行截断；二进制跳内容留文件名 | `collect_changes.py` trunc_lines / is_binary |
+| **全类型覆盖** | 新增 / 修改 / 删除 / 改名 / 合并冲突，按类型分组、组内字母序 | `collect_changes.py` parse_name_status |
+| **全新仓库支持** | 无 HEAD 时自动 fallback 到 `git diff --cached`，staged 文件不丢失 | `collect_changes.py` collect |
+| **大文件 & 二进制** | diff > 200 行截断前 80 行；新文件 > 300 行截断；二进制先读 8192 字节判定 | `collect_changes.py` trunc_lines / is_binary |
+| **删除文件轻量处理** | 删除文件只输出文件名与 HEAD 中行数，不输出冗长全量 diff | `collect_changes.py` head_line_count |
+| **冲突检测** | 检测 `U`（unmerged）状态，提醒用户先解决冲突再提交 | `collect_changes.py` collect |
 
 ## 🚀 快速开始
 
@@ -100,11 +106,12 @@ mv commit-message-assistant-v1.0.0 ~/.zcode/skills/commit-message-assistant
 技能输出逐文件清单，每条格式：
 
 ```
-feat(auth): 增加邮箱登录，顺手重构校验逻辑
-*理由：新增邮箱登录后端校验与查重，重构了 auth 模块的校验链路，供 /login/email 使用。*
+### src/auth/login.py
+feat(auth): 增加邮箱登录
+*理由：新增邮箱登录后端校验与查重逻辑，供 /login/email 接口使用。*
 ```
 
-复制第一行到你的 `git commit -m "..."` 即可，理由行供你判断和微改，不进 commit。
+复制第二行（message 行）到你的 `git commit -m "..."` 即可，理由行供你判断和微改，不进 commit。
 
 ### 4️⃣ 切换规范（可选）
 
@@ -121,12 +128,14 @@ commit-message-assistant-v1.0.0/
 ├── 📄 SKILL.md                   # 技能入口：触发、工作流、约束、校验
 ├── 📂 scripts/
 │   └── 🔧 collect_changes.py     # 只读采集：改动文件列表 + diff/内容，截断与二进制处理
-└── 📂 references/
-    ├── 📖 commit-conventions.md   # Conventional Commits type 列表 + scope 规则
-    └── 📖 message-style-guide.md # 单行 message 措辞、多变更折叠、理由写法、好坏对照
+├── 📂 references/
+│   ├── 📖 commit-conventions.md   # Conventional Commits type 列表 + scope 规则
+│   └── 📖 message-style-guide.md # 单行 message 措辞、多变更折叠、理由写法、好坏对照
+└── 📂 examples/
+    └── 📄 sample-output.md       # 三种典型场景的示例输出
 ```
 
-逐文件深度说明见 [SKILL.md](SKILL.md)。
+逐文件深度说明见 [SKILL.md](SKILL.md)，示例输出见 [examples/sample-output.md](examples/sample-output.md)。
 
 <details><summary><b>🔧 可调参数</b>（点击展开）</summary>
 
@@ -150,12 +159,12 @@ commit-message-assistant-v1.0.0/
 |-------------|-----------------|
 | `git status` | `git add` |
 | `git diff` | `git commit` |
-| `git diff --name-status` | `git push` |
-| `git log` | `git merge` |
-| `git show` | `git rebase` |
-| `git ls-files` | `git reset` |
-| `git rev-parse` | `git checkout` |
-| | `git stash` |
+| `git diff --cached` | `git push` |
+| `git diff --name-status` | `git merge` |
+| `git log` | `git rebase` |
+| `git show` | `git reset` |
+| `git ls-files` | `git checkout` |
+| `git rev-parse` | `git stash` |
 
 若你对技能说"直接提交/推上去"，它不会执行任何写操作，只会重新生成清单并提醒你手动提交。
 
@@ -166,6 +175,10 @@ commit-message-assistant-v1.0.0/
 - [x] 大 diff / untracked 大文件截断
 - [x] 二进制文件自动跳内容留文件名
 - [x] 只读安全约束（grep 可验证）
+- [x] 全新仓库支持（无 HEAD 时 fallback 到 --cached）
+- [x] 合并冲突检测与提醒
+- [x] 删除文件轻量处理（仅文件名+行数）
+- [x] Windows 编码兼容
 - [ ] 支持指定子目录 / 单文件生成
 - [ ] 支持 PR 描述生成
 
