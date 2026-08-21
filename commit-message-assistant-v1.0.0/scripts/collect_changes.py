@@ -16,6 +16,13 @@ UNTRACKED_FULL_LINES = 300  # 新文件行数 <= 此值则读全文
 KEEP_UNTRACKED_LINES = 80   # 新文件截断后保留的前 N 行
 MANY_FILES = 50            # 改动文件超过此数则加提醒
 
+# Windows 编码：强制 git 输出 UTF-8
+_GIT_ENV = dict(os.environ)
+_GIT_ENV.setdefault("GIT_EDITOR", "true")
+if sys.platform == "win32":
+    _GIT_ENV["LC_ALL"] = "C.UTF-8"
+    _GIT_ENV.setdefault("LANG", "en_US.UTF-8")
+
 
 def git(args, cwd):
     p = subprocess.run(
@@ -25,6 +32,7 @@ def git(args, cwd):
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=_GIT_ENV,
     )
     return p.returncode, p.stdout, p.stderr
 
@@ -79,6 +87,14 @@ def diff_for(path, cwd):
     return out, False
 
 
+def head_line_count(path, cwd):
+    """返回文件在 HEAD 中的行数（用于删除文件摘要）。失败返回 -1。"""
+    rc, out, _ = git(["show", f"HEAD:{path}"], cwd)
+    if rc != 0:
+        return -1
+    return len(out.splitlines())
+
+
 def read_newfile(path, cwd):
     """读新文件（staged-A 或 untracked）内容。返回 (body, total_lines, kind)。
     kind ∈ {FULL, TRUNC, BINARY, ERROR}。
@@ -86,11 +102,13 @@ def read_newfile(path, cwd):
     full = os.path.join(cwd, path)
     try:
         with open(full, "rb") as f:
+            head = f.read(8192)
+            if is_binary(head):
+                return "", 0, "BINARY"
+            f.seek(0)
             raw = f.read()
     except Exception as e:
         return str(e), 0, "ERROR"
-    if is_binary(raw):
-        return "", 0, "BINARY"
     text = raw.decode("utf-8", errors="replace")
     lines = text.splitlines()
     total = len(lines)
@@ -110,28 +128,36 @@ def collect(cwd):
     rc, out, _ = git(["diff", "HEAD", "--name-status", "-z"], cwd)
     if rc == 0:
         tracked = parse_name_status(out)
-    # rc != 0：尚无 HEAD（全新仓库），tracked 为空，全部走新文件
+    else:
+        # 无 HEAD（全新仓库），用 --cached 取 index 与空 tree 的差异
+        rc3, out3, _ = git(["diff", "--cached", "--name-status", "-z"], cwd)
+        if rc3 == 0:
+            tracked = parse_name_status(out3)
 
     rc2, out2, _ = git(["ls-files", "--others", "--exclude-standard", "-z"], cwd)
     untracked = [p for p in out2.split("\0") if p] if rc2 == 0 else []
 
-    news, mods, dels, rens = [], [], [], []
+    news, mods, dels, rens, unmerged = [], [], [], [], []
     for letter, p1, p2 in tracked:
         if letter == "A":
-            news.append(("staged", p1))
+            news.append((p1,))
         elif letter == "D":
-            dels.append(("staged", p1))
+            dels.append((p1,))
         elif letter in ("R", "C"):
             rens.append((p1, p2 or p1))
+        elif letter == "U":
+            unmerged.append((p1,))
         else:  # M 及 T/X 等少见，归入修改
-            mods.append(("staged", p1))
+            mods.append((p1,))
     for p in untracked:
-        news.append(("untracked", p))
+        news.append((p,))
 
     total = len(news) + len(mods) + len(dels) + len(rens)
     print(f"REPO: {os.path.abspath(cwd)}")
     print(f"TOTAL: {total}")
-    if total == 0:
+    if unmerged:
+        print(f"WARN: {len(unmerged)} 个文件存在未解决的合并冲突，请先解决再提交")
+    if total == 0 and not unmerged:
         print("NO_CHANGES")
         return
     if total > MANY_FILES:
@@ -139,22 +165,24 @@ def collect(cwd):
 
     # 新增
     print("\n=== 新增 ===")
-    for kind, p in sorted(news, key=lambda x: x[1]):
+    for entry in sorted(news, key=lambda x: x[0]):
+        p = entry[0]
         body, total_ln, k = read_newfile(p, cwd)
         if k == "BINARY":
-            print(f"\n## [新增] {p}  ({kind}, binary)")
+            print(f"\n## [新增] {p}  (binary)")
             print("(binary, 内容跳过)")
         elif k == "ERROR":
-            print(f"\n## [新增] {p}  ({kind}, 读取失败)")
+            print(f"\n## [新增] {p}  (读取失败)")
             print(body)
         else:
-            tag = "" if k == "FULL" else f"(前 {KEEP_UNTRACKED_LINES})"
-            print(f"\n## [新增] {p}  ({kind}, 共 {total_ln} 行{tag})")
+            tag = "" if k == "FULL" else f"(前 {KEEP_UNTRACKED_LINES} 行)"
+            print(f"\n## [新增] {p}  (共 {total_ln} 行{tag})")
             print(body)
 
     # 修改
     print("\n=== 修改 ===")
-    for kind, p in sorted(mods, key=lambda x: x[1]):
+    for entry in sorted(mods, key=lambda x: x[0]):
+        p = entry[0]
         body, b = diff_for(p, cwd)
         if b:
             print(f"\n## [修改] {p}  (binary)")
@@ -165,14 +193,13 @@ def collect(cwd):
 
     # 删除
     print("\n=== 删除 ===")
-    for kind, p in sorted(dels, key=lambda x: x[1]):
-        body, b = diff_for(p, cwd)
-        if b:
-            print(f"\n## [删除] {p}  (binary)")
-            print("(binary, 内容跳过)")
+    for entry in sorted(dels, key=lambda x: x[0]):
+        p = entry[0]
+        lc = head_line_count(p, cwd)
+        if lc >= 0:
+            print(f"\n## [删除] {p}  (HEAD 中 {lc} 行)")
         else:
             print(f"\n## [删除] {p}")
-            print(trunc_lines(body, LARGE_DIFF_LINES, KEEP_DIFF_LINES))
 
     # 改名
     print("\n=== 改名 ===")
@@ -184,6 +211,14 @@ def collect(cwd):
         else:
             print(f"\n## [改名] {old} -> {new}")
             print(trunc_lines(body, LARGE_DIFF_LINES, KEEP_DIFF_LINES))
+
+    # 未解决合并冲突
+    if unmerged:
+        print("\n=== 合并冲突 ===")
+        for entry in sorted(unmerged, key=lambda x: x[0]):
+            p = entry[0]
+            print(f"\n## [冲突] {p}")
+            print("(存在未解决的合并冲突标记，请先解决)")
 
     print("\n=== END ===")
 
