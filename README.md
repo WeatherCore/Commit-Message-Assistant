@@ -61,39 +61,38 @@ flowchart TB
 
 ## ✨ 核心亮点
 
-| 亮点 | 说明 | 落点 |
-|------|------|------|
-| **只读安全** | 全程仅调 `rev-parse` / `diff` / `ls-files`，严禁任何写操作 | `collect_changes.py` 全部 git 调用 |
-| **逐文件输出** | 每个改动文件一条单行 message + 一行功能级理由，直接复制粘贴 | SKILL.md Workflow §5 |
-| **Conventional Commits** | type 英文前缀 + 中文正文，scope 按目录自动推断、拿不准就省略 | `references/commit-conventions.md` |
-| **全类型覆盖** | 新增 / 修改 / 删除 / 改名 / 合并冲突，按类型分组、组内字母序 | `collect_changes.py` parse_name_status |
-| **全新仓库支持** | 无 HEAD 时自动 fallback 到 `git diff --cached`，staged 文件不丢失 | `collect_changes.py` collect |
-| **大文件 & 二进制** | diff > 200 行截断前 80 行；新文件 > 300 行截断；二进制先读 8192 字节判定 | `collect_changes.py` trunc_lines / is_binary |
-| **删除文件轻量处理** | 删除文件只输出文件名与 HEAD 中行数，不输出冗长全量 diff | `collect_changes.py` head_line_count |
-| **冲突检测** | 检测 `U`（unmerged）状态，提醒用户先解决冲突再提交 | `collect_changes.py` collect |
+| 亮点                     | 说明                                                                     | 落点                                         |
+| ------------------------ | ------------------------------------------------------------------------ | -------------------------------------------- |
+| **只读安全**             | 全程仅调 `rev-parse` / `diff` / `ls-files`，严禁任何写操作               | `collect_changes.py` 全部 git 调用           |
+| **逐文件输出**           | 每个改动文件一条单行 message + 一行功能级理由，直接复制粘贴              | SKILL.md Workflow §5                         |
+| **Conventional Commits** | type 英文前缀 + 中文正文，scope 按目录自动推断、拿不准就省略             | `references/commit-conventions.md`           |
+| **全类型覆盖**           | 新增 / 修改 / 删除 / 改名 / 合并冲突，按类型分组、组内字母序             | `collect_changes.py` parse_name_status       |
+| **全新仓库支持**         | 无 HEAD 时自动 fallback 到 `git diff --cached`，staged 文件不丢失        | `collect_changes.py` collect                 |
+| **大文件 & 二进制**      | diff > 200 行截断前 80 行；新文件 > 300 行截断；二进制先读 8192 字节判定 | `collect_changes.py` trunc_lines / is_binary |
+| **删除文件轻量处理**     | 删除文件只输出文件名与 HEAD 中行数，不输出冗长全量 diff                  | `collect_changes.py` head_line_count         |
+| **冲突检测**             | 检测 `U`（unmerged）状态，提醒用户先解决冲突再提交                       | `collect_changes.py` collect                 |
 
 ## 🚀 快速开始
 
 ### 0️⃣ 环境要求
 
-| 组件 | 版本 | 用途 |
-|------|------|------|
-| Python | 3.10+ | 运行采集脚本 |
-| Git | 2.0+ | 读取仓库改动（只读） |
-| ZCode | 最新 | 技能运行环境 |
+| 组件                                                              | 版本  | 用途                                  |
+| ----------------------------------------------------------------- | ----- | ------------------------------------- |
+| Python                                                            | 3.10+ | 运行采集脚本                          |
+| Git                                                               | 2.0+  | 读取仓库改动（只读）                  |
+| Claude Code / Codex / Cursor / OpenClaw / Gemini CLI 等，任选其一 | 最新  | Skill 本体是 Markdown，运行时负责执行 |
 
 ### 1️⃣ 安装
 
-将 `commit-message-assistant-v1.0.0` 文件夹移动到 ZCode 技能目录：
+打开你正在用的 agent，直接告诉它：
 
-```bash
-# 移动到技能目录（建议去掉版本号，文件夹名改为 commit-message-assistant）
-mv commit-message-assistant-v1.0.0 ~/.zcode/skills/commit-message-assistant
+```
+帮我安装这个 skill：https://github.com/WeatherCore/Code-Explain-Expert
 ```
 
 ### 2️⃣ 触发
 
-在有未提交改动的 git 仓库目录下，对 ZCode 说：
+在有未提交改动的 git 仓库目录下，对 Agent 运行时 说：
 
 ```
 帮我写提交信息
@@ -115,11 +114,11 @@ feat(auth): 增加邮箱登录
 
 ### 4️⃣ 切换规范（可选）
 
-| 你说的话 | 效果 |
-|----------|------|
-| *（默认）* | type 英文 + 正文中文 |
-| 用英文 | type 与正文都用英文 |
-| 自由格式 | 不加 type 前缀，直接中文描述 |
+| 你说的话   | 效果                         |
+| ---------- | ---------------------------- |
+| *（默认）* | type 英文 + 正文中文         |
+| 用英文     | type 与正文都用英文          |
+| 自由格式   | 不加 type 前缀，直接中文描述 |
 
 ## 📦 项目结构
 
@@ -141,13 +140,13 @@ commit-message-assistant-v1.0.0/
 
 `collect_changes.py` 顶部的阈值常量可根据项目规模调整：
 
-| 常量 | 默认值 | 含义 |
-|------|--------|------|
-| `LARGE_DIFF_LINES` | 200 | tracked 文件 diff 超过此行数则截断 |
-| `KEEP_DIFF_LINES` | 80 | 截断后保留的前 N 行 |
-| `UNTRACKED_FULL_LINES` | 300 | 新文件行数 ≤ 此值则读全文 |
-| `KEEP_UNTRACKED_LINES` | 80 | 新文件截断后保留的前 N 行 |
-| `MANY_FILES` | 50 | 改动文件超过此数则顶部加提醒 |
+| 常量                   | 默认值 | 含义                               |
+| ---------------------- | ------ | ---------------------------------- |
+| `LARGE_DIFF_LINES`     | 200    | tracked 文件 diff 超过此行数则截断 |
+| `KEEP_DIFF_LINES`      | 80     | 截断后保留的前 N 行                |
+| `UNTRACKED_FULL_LINES` | 300    | 新文件行数 ≤ 此值则读全文          |
+| `KEEP_UNTRACKED_LINES` | 80     | 新文件截断后保留的前 N 行          |
+| `MANY_FILES`           | 50     | 改动文件超过此数则顶部加提醒       |
 
 </details>
 
@@ -155,16 +154,16 @@ commit-message-assistant-v1.0.0/
 
 这是本技能的**最高优先级规则**：
 
-| 允许（只读） | 禁止（绝不执行） |
-|-------------|-----------------|
-| `git status` | `git add` |
-| `git diff` | `git commit` |
-| `git diff --cached` | `git push` |
-| `git diff --name-status` | `git merge` |
-| `git log` | `git rebase` |
-| `git show` | `git reset` |
-| `git ls-files` | `git checkout` |
-| `git rev-parse` | `git stash` |
+| 允许（只读）             | 禁止（绝不执行） |
+| ------------------------ | ---------------- |
+| `git status`             | `git add`        |
+| `git diff`               | `git commit`     |
+| `git diff --cached`      | `git push`       |
+| `git diff --name-status` | `git merge`      |
+| `git log`                | `git rebase`     |
+| `git show`               | `git reset`      |
+| `git ls-files`           | `git checkout`   |
+| `git rev-parse`          | `git stash`      |
 
 若你对技能说"直接提交/推上去"，它不会执行任何写操作，只会重新生成清单并提醒你手动提交。
 
