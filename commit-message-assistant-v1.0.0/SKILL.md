@@ -10,9 +10,9 @@ description: "Use when user asks for commit messages / 提交备注 / 帮我写�
 
 ## Workflow
 1. 确认目标目录是 git 仓库；非仓库 → 告知"当前目录不是 git 仓库。"并停。
-2. 在目标仓库目录下运行 `scripts/collect_changes.py`（技能目录下，只读），汇总全部未提交改动。
+2. 定位技能根目录（即本 SKILL.md 所在目录），在其下运行 `scripts/collect_changes.py <目标仓库路径>`（只读），汇总全部未提交改动；目标仓库为当前工作目录时可省略参数。
 3. 脚本输出 `NOT_A_REPO` / `NO_CHANGES` / 改动清单。若 `NO_CHANGES` → 告知"没有未提交改动，无需生成。"并停。
-4. 读 `references/commit-conventions.md`（type 与 scope 规则）和 `references/message-style-guide.md`（措辞与理由写法）。
+4. 读 `references/commit-conventions.md`（type 与 scope 规则）、`references/message-style-guide.md`（措辞与理由写法）和 `examples/sample-output.md`（输出格式参照，防走样）。
 5. 脚本已按类型分组（新增→修改→删除→改名）、组内字母序。逐文件生成：
    - 一行文件名（`### 相对路径`）：清晰标注本条 message 对应的文件
    - 一行 message：`type(scope): 主题`。单文件多变更 → type 取主导，主题短句带上次要改动。
@@ -44,8 +44,10 @@ description: "Use when user asks for commit messages / 提交备注 / 帮我写�
 - `scripts/collect_changes.py`、`references/commit-conventions.md`、`references/message-style-guide.md` 均存在。
 - 真实路径可走通：有改动仓库 → 跑脚本 → 出逐文件清单，全程无写操作。
 - 脚本无 add/commit/push 调用（grep 确认）。
+- `tests/selftest.sh` 全绿：临时仓库覆盖新增/修改/删除/改名/二进制/全新仓库，并断言脚本运行前后 HEAD 不变（只读性）。
 
 ## Resources
 - `scripts/collect_changes.py`：只读采集改动（name-status + 各文件 diff/新文件内容，截断与二进制处理）。每次生成都跑。支持全新仓库（无 HEAD 时自动 fallback 到 `--cached`）和合并冲突检测。
 - `references/commit-conventions.md`：Conventional Commits type 列表、scope 规则、速查。
 - `references/message-style-guide.md`：单行 message 措辞、多变更折叠、理由写法、好坏对照。
+- `examples/sample-output.md`：三种典型场景的脚本输出与技能最终结果对照，作输出格式参照。
