@@ -2,8 +2,9 @@
 
 ## 中文版
 
-COMMA 帮你在每次提交前为每个未提交改动文件生成可粘贴的 Conventional Commits 单行信息与一行功能级理由。其含金量在只读采集与工程约束：collect_changes.py 以 git diff HEAD --name-status -z（NUL 分隔）取净变更，新文件按 300 行、diff 按 200 行截断，二进制按 null 字节检测跳内容留文件名；全程仅调 rev-parse/diff/ls-files，严禁 add/commit/push，提交完全由用户手动。工程由 SKILL.md 加一脚本加两份 references 规范构成，渐进式披露。适合逐文件写规范提交信息且忌误触仓库的开发者。
+Commit Message Assistant 是一个提交前为每个改动文件生成可粘贴 Conventional Commits 提交信息的只读技能，绝不代为提交或推送。其含金量在采集鲁棒性与安全承诺：git 调用严格只读，-z 解析加 -M 重命名检测覆盖新增、修改、删除、改名、冲突五类改动，大 diff 与新文件自动截断、二进制跳过以保护上下文，无 HEAD 的全新仓库自动回退 staged 采集，Windows 下强制 UTF-8 防乱码。由 collect_changes.py 与规范文档构成，适合日常提交前快速产出规范提交信息。
 
 ## English
 
-ZCode skill producing paste-ready Conventional Commits messages—one line plus rationale per file. Read-only by design: collect_changes.py truncates at 300/200 lines, skips binaries by null-byte check, and never calls add/commit/push—only rev-parse/diff/ls-files. SKILL.md, one script, two references. For devs wanting per-file conventional messages.
+Commit Message Assistant generates paste-ready Conventional Commits messages per changed file before you commit — fully read-only, never runs add/commit/push. Its value lies in safe, robust collection: strict git read-only, -z parsing with -M rename detection covering add/modify/delete/rename/conflict, auto-truncation of large diffs and binary skip to protect context, fallback to --cached on fresh repos without HEAD, and forced UTF-8 on Windows. A single Python collector plus spec docs, ideal for daily commit hygiene.
+
