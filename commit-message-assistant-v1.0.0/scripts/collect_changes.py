@@ -9,6 +9,10 @@ import os
 import sys
 import subprocess
 
+# Windows 下系统 Python 的 stdout 可能是 GBK：强制 UTF-8，避免输出进 agent 时乱码
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 # 截断 / 阈值参数
 LARGE_DIFF_LINES = 200      # tracked 文件 diff 超过此行数则截断
 KEEP_DIFF_LINES = 80        # 截断后保留的前 N 行
@@ -88,8 +92,11 @@ def diff_for(path, cwd):
 
 
 def head_line_count(path, cwd):
-    """返回文件在 HEAD 中的行数（用于删除文件摘要）。失败返回 -1。"""
-    rc, out, _ = git(["show", f"HEAD:{path}"], cwd)
+    """返回文件在 HEAD 中的行数（用于删除文件摘要）。失败返回 -1。
+    用 `HEAD:./path` 而非 `HEAD:path`：./ 前缀明确是树内路径，
+    避免路径含冒号等特殊字符时的解析歧义。
+    """
+    rc, out, _ = git(["show", f"HEAD:./{path}"], cwd)
     if rc != 0:
         return -1
     return len(out.splitlines())
@@ -123,14 +130,14 @@ def collect(cwd):
         print("NOT_A_REPO")
         return
 
-    # tracked 改动（相对 HEAD 的净变更）
+    # tracked 改动（相对 HEAD 的净变更；-M 强制重命名检测，不依赖全局 diff.renames 配置）
     tracked = []
-    rc, out, _ = git(["diff", "HEAD", "--name-status", "-z"], cwd)
+    rc, out, _ = git(["diff", "-M", "HEAD", "--name-status", "-z"], cwd)
     if rc == 0:
         tracked = parse_name_status(out)
     else:
         # 无 HEAD（全新仓库），用 --cached 取 index 与空 tree 的差异
-        rc3, out3, _ = git(["diff", "--cached", "--name-status", "-z"], cwd)
+        rc3, out3, _ = git(["diff", "-M", "--cached", "--name-status", "-z"], cwd)
         if rc3 == 0:
             tracked = parse_name_status(out3)
 
