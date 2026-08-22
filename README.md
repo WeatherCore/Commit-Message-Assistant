@@ -87,7 +87,7 @@ flowchart TB
 打开你正在用的 agent，直接告诉它：
 
 ```
-帮我安装这个 skill：https://github.com/WeatherCore/Code-Explain-Expert
+帮我安装这个 skill：https://github.com/WeatherCore/Commit-Message-Assistant
 ```
 
 ### 2️⃣ 触发
