@@ -18,7 +18,7 @@
 
 > 它不替你提交，只把"该怎么写"摆好让你复制粘贴。
 
-Commit Message Assistant 是一个 ZCode 技能，在你 `git commit` 之前，自动为每个有改动的文件生成一条可以直接粘贴的 Conventional Commits 单行 message 和一行功能级理由。
+Commit Message Assistant 是一个 ZCode 技能，在你 `git commit` 之前，自动为每个有改动的文件生成一条可以直接粘贴的 Conventional Commits 单行 message 和一行功能级理由；同构批量文件（如脚本切出的多年份 JSON）自动聚合为一条，不逐份凑数。
 
 你只管改代码，提交信息交给它。**全程只读，绝不碰 `git add / commit / push`。**
 
@@ -39,13 +39,13 @@ flowchart TB
         E --> F["git ls-files --others -z"]
         E2 --> F
         F --> G["逐文件：diff 或读新文件内容"]
-        G --> H["截断大 diff · 跳过二进制 · 检测合并冲突"]
+        G --> H["截断大 diff · 跳过二进制 · 检测合并冲突<br/>相似组检测（数字归一化 ≥3 聚合提示）"]
     end
 
     subgraph generate["Agent 读规范 + 写 message"]
         I["读 commit-conventions.md<br/>type / scope 规则"]
         J["读 message-style-guide.md<br/>措辞 / 理由写法"]
-        I & J --> K["逐文件生成<br/>单行 message + 功能级理由"]
+        I & J --> K["逐文件生成，同构批量聚合<br/>单行 message + 功能级理由"]
     end
 
     subgraph output["输出"]
@@ -65,6 +65,7 @@ flowchart TB
 | ------------------------ | ------------------------------------------------------------------------ | -------------------------------------------- |
 | **只读安全**             | 全程仅调 `rev-parse` / `diff` / `ls-files`，严禁任何写操作               | `collect_changes.py` 全部 git 调用           |
 | **逐文件输出**           | 每个改动文件一条单行 message + 一行功能级理由，直接复制粘贴              | SKILL.md Workflow §5                         |
+| **相似文件聚合**         | 同构批量文件（如年份切割的几十个 JSON）识别为一组，聚合为一条 message，代表详列、其余略 | `collect_changes.py` find_similar_groups     |
 | **Conventional Commits** | type 英文前缀 + 中文正文，scope 按目录自动推断、拿不准就省略             | `references/commit-conventions.md`           |
 | **全类型覆盖**           | 新增 / 修改 / 删除 / 改名 / 合并冲突，按类型分组、组内字母序             | `collect_changes.py` parse_name_status       |
 | **全新仓库支持**         | 无 HEAD 时自动 fallback 到 `git diff --cached`，staged 文件不丢失        | `collect_changes.py` collect                 |
@@ -123,15 +124,17 @@ feat(auth): 增加邮箱登录
 ## 📦 项目结构
 
 ```
-commit-message-assistant-v1.0.0/
+commit-message-assistant-v1.1.0/
 ├── 📄 SKILL.md                   # 技能入口：触发、工作流、约束、校验
 ├── 📂 scripts/
-│   └── 🔧 collect_changes.py     # 只读采集：改动文件列表 + diff/内容，截断与二进制处理
+│   └── 🔧 collect_changes.py     # 只读采集：改动文件列表 + diff/内容，截断、二进制与相似组处理
 ├── 📂 references/
 │   ├── 📖 commit-conventions.md   # Conventional Commits type 列表 + scope 规则
-│   └── 📖 message-style-guide.md # 单行 message 措辞、多变更折叠、理由写法、好坏对照
-└── 📂 examples/
-    └── 📄 sample-output.md       # 三种典型场景的示例输出
+│   └── 📖 message-style-guide.md # 单行 message 措辞、多变更折叠、相似组聚合、理由写法
+├── 📂 examples/
+│   └── 📄 sample-output.md       # 四种典型场景的示例输出
+└── 📂 tests/
+    └── 🧪 selftest.sh            # 自检：临时仓库覆盖各改动类型 + 相似组 + 只读性断言
 ```
 
 逐文件深度说明见 [SKILL.md](SKILL.md)，示例输出见 [examples/sample-output.md](examples/sample-output.md)。
@@ -147,6 +150,7 @@ commit-message-assistant-v1.0.0/
 | `UNTRACKED_FULL_LINES` | 300    | 新文件行数 ≤ 此值则读全文          |
 | `KEEP_UNTRACKED_LINES` | 80     | 新文件截断后保留的前 N 行          |
 | `MANY_FILES`           | 50     | 改动文件超过此数则顶部加提醒       |
+| `SIMILAR_GROUP_MIN`    | 3      | 同模式文件达到此数则标记相似组     |
 
 </details>
 
@@ -178,6 +182,7 @@ commit-message-assistant-v1.0.0/
 - [x] 合并冲突检测与提醒
 - [x] 删除文件轻量处理（仅文件名+行数）
 - [x] Windows 编码兼容
+- [x] 相似文件聚合（同构批量文件识别为一条 message，v1.1.0）
 - [ ] 支持指定子目录 / 单文件生成
 - [ ] 支持 PR 描述生成
 
