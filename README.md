@@ -124,7 +124,7 @@ feat(auth): 增加邮箱登录
 ## 📦 项目结构
 
 ```
-commit-message-assistant-v1.1.0/
+commit-message-assistant/
 ├── 📄 SKILL.md                   # 技能入口：触发、工作流、约束、校验
 ├── 📂 scripts/
 │   └── 🔧 collect_changes.py     # 只读采集：改动文件列表 + diff/内容，截断、二进制与相似组处理
