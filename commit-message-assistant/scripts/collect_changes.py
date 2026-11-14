@@ -2,12 +2,20 @@
 # -*- coding: utf-8 -*-
 """只读采集 git 未提交改动，为 commit-message-assistant 提供生成素材。
 
-安全约束：仅调用只读 git 子命令（rev-parse / diff / ls-files）和读取文件，
+安全约束：仅调用只读 git 子命令（rev-parse / diff / ls-files / show）和读取文件，
 绝不执行 add/commit/push 等任何改变仓库状态的命令。
+
+采集基准：传入仓库子目录时自动定位仓库根（--show-toplevel，只读白名单内），
+后续 git 调用与文件读取全部以仓库根为基准，保证路径语义统一。
+
+上下文保护：行数截断 + 字节帽双保险——行数截断防长 diff，
+字节帽防"单行超大文件"（压缩 JSON / minified JS）在行数规则下漏网。
 
 相似组检测：路径数字归一化后同模式且数量达标的文件视为同一批量操作产物
 （如按年份切割出的 data/2015.json ... data/2024.json），输出 SIMILAR_GROUP
 标记；组内代表文件详列、其余仅留文件名，供上层聚合为一条 commit message。
+新增/修改/改名三组对称支持离群详列：成员体量（行数/diff 行数）与代表相差
+悬殊（>2× 或 <½）时转为详列并统一标注，避免整组语义被代表文件掩盖。
 """
 import os
 import re
@@ -23,8 +31,12 @@ LARGE_DIFF_LINES = 200      # tracked 文件 diff 超过此行数则截断
 KEEP_DIFF_LINES = 80        # 截断后保留的前 N 行
 UNTRACKED_FULL_LINES = 300  # 新文件行数 <= 此值则读全文
 KEEP_UNTRACKED_LINES = 80   # 新文件截断后保留的前 N 行
-MANY_FILES = 50            # 改动文件超过此数则加提醒
-SIMILAR_GROUP_MIN = 3      # 同模式文件达到此数则标记为相似组（建议聚合为一条 message）
+MAX_BODY_BYTES = 16384      # 文件体（diff/新文件内容）字节上限；防单行大文件撑爆上下文
+MANY_FILES = 50             # 改动文件超过此数则加提醒
+SIMILAR_GROUP_MIN = 3       # 同模式文件达到此数则标记为相似组（建议聚合为一条 message）
+
+# 相似组离群成员的统一标注（新增/修改/改名三组共用，上层按此识别"已详列"）
+OUTLIER_NOTE = "  [相似组，离群，已详列]"
 
 # Windows 编码：强制 git 输出 UTF-8
 _GIT_ENV = dict(os.environ)
@@ -85,6 +97,29 @@ def trunc_lines(text, limit, keep):
     if len(lines) > limit:
         return "\n".join(lines[:keep]) + f"\n…(省略 {len(lines) - keep} 行)"
     return text
+
+
+def trunc_bytes(text):
+    """字节帽：文件体超过 MAX_BODY_BYTES 字节则截前 N 字节。
+    行数截断防不住"单行超大文件"（整份压缩 JSON 只占 1 行，行数远小于阈值），
+    故所有进入输出的体内容最终都要过这道帽。按字节切片后以
+    errors="ignore" 解码，自动丢弃尾部残缺的多字节序列（UTF-8 边界安全）。
+    """
+    raw = text.encode("utf-8", errors="replace")
+    if len(raw) <= MAX_BODY_BYTES:
+        return text
+    return (
+        raw[:MAX_BODY_BYTES].decode("utf-8", errors="ignore")
+        + f"\n…(超 {MAX_BODY_BYTES // 1024}KB 已截断)"
+    )
+
+
+def is_outlier(ln, rep_ln):
+    """相似组离群判据：成员体量 >2× 或 <½ 代表即离群。
+    ln/rep_ln 任一无效（<=0，如二进制/读取失败）则不算离群。
+    三组（新增按行数、修改/改名按 diff 行数）共用同一规则。
+    """
+    return rep_ln > 0 and ln > 0 and (ln > 2 * rep_ln or 2 * ln < rep_ln)
 
 
 def path_pattern(path):
@@ -167,6 +202,13 @@ def collect(cwd):
         print("NOT_A_REPO")
         return
 
+    # 子目录调用扶正：定位仓库根，后续 git 调用与文件读取全部以根为基准。
+    # git diff 的输出路径本就相对仓库根，而 ls-files 相对当前目录——
+    # 统一切到根，两组路径语义才能对齐，REPO: 行也不会误导。
+    rc, root, _ = git(["rev-parse", "--show-toplevel"], cwd)
+    if rc == 0 and root.strip():
+        cwd = os.path.abspath(root.strip())
+
     # tracked 改动（相对 HEAD 的净变更；-M 强制重命名检测，不依赖全局 diff.renames 配置）
     tracked = []
     rc, out, _ = git(["diff", "-M", "HEAD", "--name-status", "-z"], cwd)
@@ -181,20 +223,35 @@ def collect(cwd):
     rc2, out2, _ = git(["ls-files", "--others", "--exclude-standard", "-z"], cwd)
     untracked = [p for p in out2.split("\0") if p] if rc2 == 0 else []
 
+    # 合并冲突权威判定：`git diff HEAD` 会把未解决冲突的文件伪装成普通 M（U 只在
+    # --cached/status 视角出现），主路径解析永远看不到 U。改用 ls-files --unmerged
+    # （只读白名单内）枚举冲突路径——其 -z 输出为 "<mode> <hash> <stage>\t<path>"
+    # 全格式，且同一文件按 stage 1/2/3 出现三次，须按 tab 取末字段并去重。
+    # 冲突文件同时从普通分组剔除——其 diff 是 ^^^^^^^ 组合格式，不该进"修改"组。
+    unmerged_set = set()
+    rc4, out4, _ = git(["ls-files", "--unmerged", "-z"], cwd)
+    if rc4 == 0:
+        for entry in out4.split("\0"):
+            if entry:
+                unmerged_set.add(entry.rsplit("\t", 1)[-1])
+
     news, mods, dels, rens, unmerged = [], [], [], [], []
     for letter, p1, p2 in tracked:
+        if p1 in unmerged_set:
+            continue  # 冲突文件单独成组，不进新增/修改/删除/改名
         if letter == "A":
             news.append((p1,))
         elif letter == "D":
             dels.append((p1,))
         elif letter in ("R", "C"):
             rens.append((p1, p2 or p1))
-        elif letter == "U":
-            unmerged.append((p1,))
         else:  # M 及 T/X 等少见，归入修改
             mods.append((p1,))
     for p in untracked:
+        if p in unmerged_set:
+            continue
         news.append((p,))
+    unmerged = sorted(unmerged_set)
 
     total = len(news) + len(mods) + len(dels) + len(rens)
     print(f"REPO: {os.path.abspath(cwd)}")
@@ -235,22 +292,22 @@ def collect(cwd):
             skip = False
             if grp and p != grp[0]:
                 rep_ln = news_cache.get(grp[0], ("", 0, ""))[1]
-                if rep_ln > 0 and total_ln > 0 and (
-                    total_ln > 2 * rep_ln or 2 * total_ln < rep_ln
-                ):
-                    note = "  [相似组，行数离群，已详列]"
+                if is_outlier(total_ln, rep_ln):
+                    note = OUTLIER_NOTE
                 else:
                     note = "  [相似组，内容略]"
                     skip = True
             print(f"\n## [新增] {p}  (共 {total_ln} 行{tag}){note}")
             if not skip:
-                print(body)
+                # 行数截断管长文件，字节帽管单行大文件，双保险缺一不可
+                print(trunc_bytes(body))
 
-    # 修改（相似组代表详列 diff，其余略）
+    # 修改（相似组代表详列 diff，离群成员转为详列，其余略）
     print("\n=== 修改 ===")
     mods_sorted = sorted(mods, key=lambda x: x[0])
     mods_groups = find_similar_groups([e[0] for e in mods_sorted])
     printed_mods = set()
+    mods_ln = {}  # 成员 diff 行数缓存；代表按字母序先遍历，离群判断时必已就位
     for entry in mods_sorted:
         p = entry[0]
         grp = maybe_group_banner(p, mods_groups, printed_mods)
@@ -258,11 +315,20 @@ def collect(cwd):
         if b:
             print(f"\n## [修改] {p}  (binary)")
             print("(binary, 内容跳过)")
-        else:
-            note = "  [相似组，diff 略]" if grp and p != grp[0] else ""
-            print(f"\n## [修改] {p}{note}")
-            if not note:
-                print(trunc_lines(body, LARGE_DIFF_LINES, KEEP_DIFF_LINES))
+            continue
+        mods_ln[p] = len(body.splitlines())
+        note = ""
+        skip = False
+        if grp and p != grp[0]:
+            # 与新增组同判据：diff 行数与代表相差悬殊则详列，防止整组语义被代表掩盖
+            if is_outlier(mods_ln[p], mods_ln.get(grp[0], -1)):
+                note = OUTLIER_NOTE
+            else:
+                note = "  [相似组，diff 略]"
+                skip = True
+        print(f"\n## [修改] {p}{note}")
+        if not skip:
+            print(trunc_bytes(trunc_lines(body, LARGE_DIFF_LINES, KEEP_DIFF_LINES)))
 
     # 删除（相似组只加标记，成员本就仅文件名+行数）
     print("\n=== 删除 ===")
@@ -278,28 +344,37 @@ def collect(cwd):
         else:
             print(f"\n## [删除] {p}")
 
-    # 改名（组键取新路径；相似组代表详列 diff，其余略）
+    # 改名（组键取新路径；相似组代表详列 diff，离群成员转为详列，其余略）
     print("\n=== 改名 ===")
     rens_sorted = sorted(rens, key=lambda x: x[1])
     rens_groups = find_similar_groups([e[1] for e in rens_sorted])
     printed_rens = set()
+    rens_ln = {}  # 成员 diff 行数缓存；代表按字母序先遍历，离群判断时必已就位
     for old, new in rens_sorted:
         grp = maybe_group_banner(new, rens_groups, printed_rens)
         body, b = diff_for(new, cwd)
         if b:
             print(f"\n## [改名] {old} -> {new}  (binary)")
             print("(binary, 内容跳过)")
-        else:
-            note = "  [相似组，diff 略]" if grp and new != grp[0] else ""
-            print(f"\n## [改名] {old} -> {new}{note}")
-            if not note:
-                print(trunc_lines(body, LARGE_DIFF_LINES, KEEP_DIFF_LINES))
+            continue
+        rens_ln[new] = len(body.splitlines())
+        note = ""
+        skip = False
+        if grp and new != grp[0]:
+            # 与新增/修改组同判据，三组文案统一为 OUTLIER_NOTE
+            if is_outlier(rens_ln[new], rens_ln.get(grp[0], -1)):
+                note = OUTLIER_NOTE
+            else:
+                note = "  [相似组，diff 略]"
+                skip = True
+        print(f"\n## [改名] {old} -> {new}{note}")
+        if not skip:
+            print(trunc_bytes(trunc_lines(body, LARGE_DIFF_LINES, KEEP_DIFF_LINES)))
 
     # 未解决合并冲突
     if unmerged:
         print("\n=== 合并冲突 ===")
-        for entry in sorted(unmerged, key=lambda x: x[0]):
-            p = entry[0]
+        for p in unmerged:  # unmerged 已是去重排序后的纯路径列表
             print(f"\n## [冲突] {p}")
             print("(存在未解决的合并冲突标记，请先解决)")
 
