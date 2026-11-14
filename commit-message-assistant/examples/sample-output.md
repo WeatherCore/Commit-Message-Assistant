@@ -1,6 +1,6 @@
 # 示例输出
 
-以下展示在四种典型场景下，`collect_changes.py` 的采集结果和技能最终生成的 commit message。
+以下展示在五种典型场景下，`collect_changes.py` 的采集结果和技能最终生成的 commit message。
 
 ---
 
@@ -104,7 +104,7 @@ feat: 创建程序入口
 
 ```
 REPO: /home/user/my-project
-TOTAL: 2
+TOTAL: 1
 WARN: 1 个文件存在未解决的合并冲突，请先解决再提交
 
 === 修改 ===
@@ -187,3 +187,29 @@ docs: 添加杂项说明 x1
 docs: 添加杂项说明 x2
 *理由：新增杂项文本文件。*
 ```
+
+---
+
+## 场景 5：跨文件提交建议
+
+假设仓库同时有：`src/auth/email_login.py`（新增）、`src/auth/login_service.py`（修改，登录服务与调用点）、`docs/README.md`（修改，独立文档更新）。逐文件 message 之后，末尾给出提交建议节。
+
+### 技能生成结果（仅展示末尾建议节，逐文件清单同场景 1）
+
+```
+## 💡 提交建议
+
+**建议提交 1：新增邮箱登录**（可合并为一次提交）
+- src/auth/email_login.py
+- src/auth/login_service.py
+- `feat(auth): 新增邮箱登录后端校验，login_service 接入邮箱通道`
+
+**建议提交 2：更新 README**（单文件，无合并价值，保持独立提交）
+- docs/README.md
+- `docs: 更新 README 安装说明`
+```
+
+### 要点
+- 建议提交 1 的两个文件属同一逻辑变更（新功能 + 其服务接入点），合并 message 以整个提交为单位书写。
+- 建议提交 2 是单文件且与其他改动无逻辑关联：**不硬凑组**，仅复述独立提交的推荐写法。
+- 无任何可分组项时整节省略；建议节是参考视图，不替用户决定提交切分。
